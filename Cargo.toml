@@ -1,0 +1,11 @@
+[package]
+name = "snip"
+version = "0.1.0"
+authors = ["Cristian Kubis <cristian.kubis@tsunix.de>"]
+
+[dependencies]
+libc = "0.2.43"
+clap = "2.32.0"
+failure = "0.1.2"
+log = "0.4.4"
+fern = "0.5.6"
