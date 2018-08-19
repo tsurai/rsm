@@ -10,7 +10,7 @@ use failure::*;
 
 // process cli arguments with clap
 fn process_cli<'a>() -> ArgMatches<'a> {
-    App::new("snip")
+    App::new("rsm")
         .version("0.1")
         .author("Cristian Kubis <cristian.kubis@tsunix.de>")
         .about("Multi-user snippet manager")
