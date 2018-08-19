@@ -4,6 +4,12 @@ extern crate fern;
 extern crate libc;
 extern crate clap;
 extern crate failure;
+extern crate sqlite;
+extern crate mktemp;
+
+mod commands;
+mod content;
+mod util;
 
 use clap::{Arg, App, ArgMatches, AppSettings, SubCommand};
 use failure::*;
@@ -35,20 +41,16 @@ fn process_cli<'a>() -> ArgMatches<'a> {
 
 fn run() -> Result<(), Error> {
     let app_matches = process_cli();
-    println!("{:?}", app_matches);
 
     match app_matches.subcommand() {
         ("add", Some(sub_matches)) => {
             let name = sub_matches.values_of("name").unwrap().collect::<Vec<&str>>().as_slice().join(" ");
             let tags = sub_matches.values_of("tags").map(|x| x.collect::<Vec<&str>>());
 
-            println!("{}", name);
-            println!("{:?}", tags);
+            commands::add_snippet(name, tags)
         },
         _ => panic!("unexpected error"),
     }
-
-    Ok(())
 }
 
 fn main() {
