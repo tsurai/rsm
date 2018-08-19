@@ -1,6 +1,7 @@
 use failure::*;
 use content;
 use util;
+use db;
 
 pub fn add_snippet(name: String, tags: Option<Vec<&str>>) -> Result<(), Error> {
     let content = (if util::is_a_tty() {
@@ -12,7 +13,11 @@ pub fn add_snippet(name: String, tags: Option<Vec<&str>>) -> Result<(), Error> {
     })
     .context("failed to get snippet content")?;
 
-    println!("{}", content);
+    let conn = db::connect()
+        .context("failed to connect to the database")?;
+
+    db::save_snippet(&conn, name, content, tags)
+        .context("failed to save snippet")?;
 
     Ok(())
 }

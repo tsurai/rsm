@@ -10,6 +10,7 @@ extern crate mktemp;
 mod commands;
 mod content;
 mod util;
+mod db;
 
 use clap::{Arg, App, ArgMatches, AppSettings, SubCommand};
 use failure::*;
