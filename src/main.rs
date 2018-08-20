@@ -9,6 +9,7 @@ extern crate mktemp;
 
 mod commands;
 mod content;
+mod error;
 mod util;
 mod db;
 
@@ -48,7 +49,11 @@ fn run() -> Result<(), Error> {
             let name = sub_matches.values_of("name").unwrap().collect::<Vec<&str>>().as_slice().join(" ");
             let tags = sub_matches.values_of("tags").map(|x| x.collect::<Vec<&str>>());
 
-            commands::add_snippet(name, tags)
+            let snippet_id = commands::add_snippet(name, tags)?;
+            println!("Created snippet {}.", snippet_id);
+
+            Ok(())
+        },
         },
         _ => panic!("unexpected error"),
     }

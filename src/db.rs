@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::{env, fs};
-use failure::*;
 use sqlite::{self, Connection, Value};
+use failure::*;
+use error;
 
 static DB_PATH: &'static str = ".local/rsm/data.db";
 
@@ -24,7 +25,7 @@ pub fn connect() -> Result<Connection, Error> {
     Ok(conn)
 }
 
-pub fn save_snippet(conn: &Connection, name: String, content: String, tags: Option<Vec<&str>>) -> Result<(), Error> {
+pub fn save_snippet(conn: &Connection, name: String, content: String, tags: Option<Vec<&str>>) -> Result<i64, Error> {
     let mut statement = conn.prepare("INSERT INTO `snippets` (name, content) VALUES (?, ?)")
         .context("failed to prepare save statement")?;
 
@@ -34,28 +35,27 @@ pub fn save_snippet(conn: &Connection, name: String, content: String, tags: Opti
     statement.bind(2, content.as_str())
         .context("failed to bind content")?;
 
-    // check if the snippet name is a duplicate and  exit early gracefully
     if let Err(e) = statement.next() {
+        // check if the snippet name is a duplicate
         if e.code.unwrap_or(0) == 19 {
-            println!("Error: duplicate snippet name");
-            return Ok(());
+            bail!(error::DupSnippetName);
         }
 
         bail!(e.context("failed to execute sql statement"))
     }
 
+    let snippet_id = get_snippet_id(&conn, name.as_str())
+        .context("failed to get snippet id")?;
+
     if let Some(tags) = tags {
-        save_tags(&conn, name.as_str(), tags)
+        save_tags(&conn, snippet_id, tags)
             .context("failed to save snippet tags")?;
     }
 
-    Ok(())
+    Ok(snippet_id)
 }
 
-fn save_tags(conn: &Connection, name: &str, tags: Vec<&str>) -> Result<(), Error> {
-    let snippet_id = get_snippet_id(conn, name)
-        .context("failed to get snippet id")?;
-
+fn save_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Result<(), Error> {
     // insert tag if not exists
     let mut insert_tag = conn.prepare(
        "INSERT INTO `tags` (name)
