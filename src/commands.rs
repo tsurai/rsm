@@ -1,4 +1,5 @@
 use failure::*;
+use ansi_term::{Style, Colour};
 use content;
 use util;
 use db;
@@ -32,6 +33,44 @@ pub fn show_snippet(snippet_id: i64) -> Result<(), Error> {
         .context("failed to load snippet")?;
 
     println!("{}", snippet);
+
+    Ok(())
+}
+
+pub fn list_snippets(name: Option<String>, tags: Option<Vec<&str>>) -> Result<(), Error> {
+    let conn = db::connect()
+        .context("failed to connect to database")?;
+
+    let snippets = db::search_snippets(&conn, name, tags)
+        .context("failed to search snippets")?;
+
+    // get the max width for each list column
+    let (id_padding, tag_padding, name_padding) = util::get_list_col_widths(&snippets);
+
+    // print list header
+    let style = Style::new().underline();
+    println!("{} {} {}",
+             style.paint(format!("{:1$}", "Id", id_padding)),
+             style.paint(format!("{:1$}", "Tags", tag_padding)),
+             style.paint(format!("{:1$}", "Name", name_padding)));
+
+    for (i, snippet) in snippets.iter().enumerate() {
+        let style = if i % 2 == 0 {
+            Style::new()
+        } else {
+            Style::new().on(Colour::Fixed(235))
+        };
+
+        let snippet_line = format!("{:3$} {:4$} {:5$}",
+                                   snippet.id,
+                                   snippet.tags.as_slice().join(", "),
+                                   snippet.name, id_padding,
+                                   tag_padding,
+                                   name_padding);
+
+        // print line with backgrounbd color
+        println!("{}", style.paint(snippet_line));
+    }
 
     Ok(())
 }

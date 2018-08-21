@@ -26,6 +26,65 @@ pub fn connect() -> Result<Connection, Error> {
     Ok(conn)
 }
 
+pub fn search_snippets(conn: &Connection, name: Option<String>, tags: Option<Vec<&str>>) -> Result<Vec<Snippet>, Error> {
+    let name_filter = name.clone().map_or(if tags.is_some() { "0" } else { "1" }, |_| "S.name LIKE ?");
+    let tag_filter = tags.clone().map_or(if name.is_some() { "0" } else { "1" }.to_string(), |x| (0..x.len()).map(|_| "T.name LIKE ?").collect::<Vec<&str>>().as_slice().join(" AND "));
+
+    let query = format!("SELECT S.id, S.name, S.content FROM `snippets` AS S
+        WHERE {}
+        UNION
+        SELECT S.id, S.name, S.content FROM `snippets` AS S
+        INNER JOIN `snippet_tags` AS ST ON ST.snippet_id = S.id
+        INNER JOIN `tags` AS T ON T.id = ST.tag_id
+        WHERE {} GROUP BY S.id",
+        name_filter,
+        tag_filter);
+
+    let mut statement = conn.prepare(query.as_str())
+        .context("failed to prepare load statement")?;
+
+    let mut bind_count = 1;
+
+    if name.is_some() {
+        statement.bind(bind_count, name.unwrap().as_str())
+            .context("failed to bind name")?;
+        bind_count += 1;
+    }
+
+    if tags.is_some() {
+        for tag in tags.unwrap() {
+            statement.bind(bind_count, tag)
+                .context("failed to bind tag")?;
+            bind_count += 1;
+        }
+    }
+
+    let mut snippets = Vec::new();
+
+    while let State::Row = statement.next().context("failed to execute sql statement")? {
+        let snippet_id = statement.read::<i64>(0)
+            .context("failed to read snippet id")?;
+        let name = statement.read::<String>(1)
+            .context("failed to read snippet name")?;
+        let content = statement.read::<String>(2)
+            .context("failed to read content")?;
+
+        let tags = get_snippet_tags(conn, snippet_id)
+            .context("failed to load snippet tags")?;
+
+        let snippet = Snippet {
+            id: snippet_id,
+            name: name,
+            content: content,
+            tags: tags
+        };
+
+        snippets.push(snippet);
+    }
+
+    Ok(snippets)
+}
+
 pub fn get_snippet(conn: &Connection, snippet_id: i64) -> Result<Snippet, Error> {
     let mut statement = conn.prepare("SELECT name, content FROM `snippets` WHERE id = ?")
         .context("failed to prepare load statement")?;

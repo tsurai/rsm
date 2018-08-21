@@ -47,6 +47,19 @@ fn process_cli<'a>() -> ArgMatches<'a> {
                 .arg(Arg::with_name("id")
                      .help("id of the snippet")
                      .required(true)))
+        .subcommand(
+            SubCommand::with_name("list")
+                .about("Used to list snippets")
+                .setting(AppSettings::TrailingVarArg)
+                .arg(Arg::with_name("tags")
+                     .help("tag filter")
+                     .long("--tags")
+                     .short("-t")
+                     .takes_value(true)
+                     .multiple(true))
+                .arg(Arg::with_name("name")
+                     .help("name filter")
+                     .multiple(true)))
         .get_matches()
 }
 
@@ -66,6 +79,12 @@ fn run() -> Result<(), Error> {
                 .context("failed to parse snippet id")?;
 
             commands::show_snippet(snippet_id)
+        },
+        ("list", Some(sub_matches)) => {
+            let name = sub_matches.values_of("name").map(|x| x.collect::<Vec<&str>>().as_slice().join(" "));
+            let tags = sub_matches.values_of("tags").map(|x| x.collect::<Vec<&str>>());
+
+            commands::list_snippets(name, tags)
         },
         _ => panic!("unexpected error"),
     }
