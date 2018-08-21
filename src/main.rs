@@ -6,7 +6,9 @@ extern crate clap;
 extern crate failure;
 extern crate sqlite;
 extern crate mktemp;
+extern crate ansi_term;
 
+mod snippet;
 mod commands;
 mod content;
 mod error;
@@ -14,6 +16,7 @@ mod util;
 mod db;
 
 use clap::{Arg, App, ArgMatches, AppSettings, SubCommand};
+use std::str::FromStr;
 use failure::*;
 
 // process cli arguments with clap
@@ -30,13 +33,19 @@ fn process_cli<'a>() -> ArgMatches<'a> {
                 .setting(AppSettings::TrailingVarArg)
                 .arg(Arg::with_name("tags")
                      .help("adds one or more tags to the snippet")
+                     .long("--tags")
+                     .short("-t")
                      .takes_value(true)
                      .multiple(true))
                 .arg(Arg::with_name("name")
                      .help("name of the snippet")
-                     .value_name("NAME")
                      .multiple(true)
-                     .last(true)
+                     .required(true)))
+        .subcommand(
+            SubCommand::with_name("show")
+                .about("Used to display a snippet")
+                .arg(Arg::with_name("id")
+                     .help("id of the snippet")
                      .required(true)))
         .get_matches()
 }
@@ -49,11 +58,14 @@ fn run() -> Result<(), Error> {
             let name = sub_matches.values_of("name").unwrap().collect::<Vec<&str>>().as_slice().join(" ");
             let tags = sub_matches.values_of("tags").map(|x| x.collect::<Vec<&str>>());
 
-            let snippet_id = commands::add_snippet(name, tags)?;
-            println!("Created snippet {}.", snippet_id);
-
-            Ok(())
+            commands::add_snippet(name, tags)
         },
+        ("show", Some(sub_matches)) => {
+            let id_str = sub_matches.value_of("id").unwrap();
+            let snippet_id = i64::from_str(id_str)
+                .context("failed to parse snippet id")?;
+
+            commands::show_snippet(snippet_id)
         },
         _ => panic!("unexpected error"),
     }

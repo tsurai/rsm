@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::{env, fs};
-use sqlite::{self, Connection, Value};
+use sqlite::{self, Connection, Value, State};
 use failure::*;
+use snippet::Snippet;
 use error;
 
 static DB_PATH: &'static str = ".local/rsm/data.db";
@@ -23,6 +24,38 @@ pub fn connect() -> Result<Connection, Error> {
     };
 
     Ok(conn)
+}
+
+pub fn get_snippet(conn: &Connection, snippet_id: i64) -> Result<Snippet, Error> {
+    let mut statement = conn.prepare("SELECT name, content FROM `snippets` WHERE id = ?")
+        .context("failed to prepare load statement")?;
+
+    statement.bind(1, snippet_id)
+        .context("failed to bind snippet id")?;
+
+    let state = statement.next()
+        .context("failed to execute sql statement")?;
+
+    if state == State::Done {
+        bail!(error::UnknownSnippetId);
+    }
+
+    let name = statement.read::<String>(0)
+        .context("failed to read snippet name")?;
+    let content = statement.read::<String>(1)
+        .context("failed to read snippet content")?;
+
+    let tags = get_snippet_tags(conn, snippet_id)
+        .context("failed to load snippet tags")?;
+
+    let snippet = Snippet {
+        id: snippet_id,
+        name: name,
+        content: content,
+        tags: tags
+    };
+
+    Ok(snippet)
 }
 
 pub fn save_snippet(conn: &Connection, name: String, content: String, tags: Option<Vec<&str>>) -> Result<i64, Error> {
@@ -104,6 +137,28 @@ fn get_snippet_id(conn: &Connection, name: &str) -> Result<i64, Error> {
         .context("failed to select snippet")?;
 
     Ok(snippet_id)
+}
+
+fn get_snippet_tags(conn: &Connection, snippet_id: i64) -> Result<Vec<String>, Error> {
+    let mut statement = conn.prepare(
+        "SELECT name FROM `tags` AS T
+        INNER JOIN `snippet_tags` AS ST on T.id = ST.tag_id
+        AND ST.snippet_id = ?"
+        ).context("failed to prepare load statement")?;
+
+    statement.bind(1, snippet_id)
+        .context("failed to bind snippet id")?;
+
+    let mut tags = Vec::new();
+
+    while let State::Row = statement.next().context("failed to execute sql statement")? {
+       let tag = statement.read::<String>(0)
+           .context("failed to read tag name")?;
+
+       tags.push(tag);
+    }
+
+    Ok(tags)
 }
 
 fn get_db_path() -> Result<PathBuf, Error> {
