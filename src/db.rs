@@ -23,6 +23,9 @@ pub fn connect() -> Result<Connection, Error> {
             .map_err::<Error, _>(|e| e.into())?
     };
 
+    conn.execute("PRAGMA foreign_keys = ON")
+        .context("failed to enable foreign_key support")?;
+
     Ok(conn)
 }
 
@@ -115,6 +118,19 @@ pub fn get_snippet(conn: &Connection, snippet_id: i64) -> Result<Snippet, Error>
     };
 
     Ok(snippet)
+}
+
+pub fn delete_snippet(conn: &Connection, snippet_id: i64) -> Result<(), Error> {
+    let mut statement = conn.prepare("DELETE FROM `snippets` WHERE id = ?")
+        .context("failed to prepare load statement")?;
+
+    statement.bind(1, snippet_id)
+        .context("failed to bind snippet id")?;
+
+    statement.next()
+        .context("failed to execute sql statement")?;
+
+    Ok(())
 }
 
 pub fn save_snippet(conn: &Connection, name: String, content: String, tags: Option<Vec<&str>>) -> Result<i64, Error> {
@@ -251,8 +267,8 @@ fn init(db_file: &PathBuf) -> Result<Connection, Error> {
         );
         CREATE TABLE snippet_tags(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            snippet_id INTEGER,
-            tag_id INTEGER
+            snippet_id INTEGER REFERENCES snippets(id) ON DELETE CASCADE,
+            tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE
         );"
         ).context("failed to create database tables")?;
 

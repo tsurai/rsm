@@ -1,3 +1,5 @@
+use std::io::prelude::*;
+use std::io;
 use failure::*;
 use ansi_term::{Style, Colour};
 use content;
@@ -37,12 +39,59 @@ pub fn show_snippet(snippet_id: i64) -> Result<(), Error> {
     Ok(())
 }
 
+pub fn delete_snippet(snippet_id: i64, confirmation: bool) -> Result<(), Error> {
+    let conn = db::connect()
+        .context("failed to connect to database")?;
+
+    let snippet = db::get_snippet(&conn, snippet_id)
+        .context("failed to load snippet")?;
+
+    if !confirmation {
+        let stdin = io::stdin();
+        let mut handle = stdin.lock();
+
+        loop {
+            print!("Delete snippet {} '{}' (yes/no) ", snippet_id, snippet.name);
+            io::stdout().flush()
+                .context("failed to flush stdout")?;
+
+            let mut buffer = String::new();
+            handle.read_line(&mut buffer)
+                .context("failed to read user input")?;
+
+            if buffer != "\n" {
+                let input = &buffer.as_str()[..buffer.len()-1];
+
+                if "yes".starts_with(input) {
+                    break;
+                }
+
+                if "no".starts_with(input) {
+                    println!("Snippet not deleted");
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    db::delete_snippet(&conn, snippet_id)
+        .context("failed to delete snippet")?;
+    println!("Deleted snippet {} '{}'", snippet_id, snippet.name);
+
+    Ok(())
+}
+
 pub fn list_snippets(name: Option<String>, tags: Option<Vec<&str>>) -> Result<(), Error> {
     let conn = db::connect()
         .context("failed to connect to database")?;
 
     let snippets = db::search_snippets(&conn, name, tags)
         .context("failed to search snippets")?;
+
+    if snippets.is_empty() {
+        println!("No snippets found");
+        return Ok(());
+    }
 
     // get the max width for each list column
     let (id_padding, tag_padding, name_padding) = util::get_list_col_widths(&snippets);

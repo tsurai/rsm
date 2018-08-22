@@ -15,12 +15,29 @@ mod error;
 mod util;
 mod db;
 
-use clap::{Arg, App, ArgMatches, AppSettings, SubCommand};
+use clap::{Arg, App, ArgGroup, ArgMatches, AppSettings, SubCommand};
 use std::str::FromStr;
 use failure::*;
 
 // process cli arguments with clap
 fn process_cli<'a>() -> ArgMatches<'a> {
+    let id_arg = Arg::with_name("id")
+        .help("id of the snippet")
+        .required(true);
+
+    let name_arg = Arg::with_name("name")
+        .help("name of the snippet")
+        .multiple(true)
+        .last(true);
+
+    let tag_arg = Arg::with_name("tags")
+        .help("tags to modify")
+        .short("-t")
+        .long("--tags")
+        .requires("modifier")
+        .takes_value(true)
+        .multiple(true);
+
     App::new("rsm")
         .version("0.1")
         .author("Cristian Kubis <cristian.kubis@tsunix.de>")
@@ -31,35 +48,28 @@ fn process_cli<'a>() -> ArgMatches<'a> {
             SubCommand::with_name("add")
                 .about("Used to add a new snippet")
                 .setting(AppSettings::TrailingVarArg)
-                .arg(Arg::with_name("tags")
-                     .help("adds one or more tags to the snippet")
-                     .long("--tags")
-                     .short("-t")
-                     .takes_value(true)
-                     .multiple(true))
-                .arg(Arg::with_name("name")
-                     .help("name of the snippet")
-                     .multiple(true)
-                     .required(true)))
+                .arg(&tag_arg)
+                .arg(&name_arg
+                    .clone()
+                    .required(true)))
         .subcommand(
             SubCommand::with_name("show")
                 .about("Used to display a snippet")
-                .arg(Arg::with_name("id")
-                     .help("id of the snippet")
-                     .required(true)))
+                .arg(&id_arg))
+        .subcommand(
+            SubCommand::with_name("delete")
+                .about("Used to delete a snippet")
+                .arg(Arg::with_name("confirm")
+                    .help("don't ask for confirmation")
+                    .short("-y")
+                    .long("--yes"))
+                .arg(&id_arg))
         .subcommand(
             SubCommand::with_name("list")
                 .about("Used to list snippets")
                 .setting(AppSettings::TrailingVarArg)
-                .arg(Arg::with_name("tags")
-                     .help("tag filter")
-                     .long("--tags")
-                     .short("-t")
-                     .takes_value(true)
-                     .multiple(true))
-                .arg(Arg::with_name("name")
-                     .help("name filter")
-                     .multiple(true)))
+                .arg(&tag_arg)
+                .arg(&name_arg))
         .get_matches()
 }
 
@@ -79,6 +89,14 @@ fn run() -> Result<(), Error> {
                 .context("failed to parse snippet id")?;
 
             commands::show_snippet(snippet_id)
+        },
+        ("delete", Some(sub_matches)) => {
+            let confirmation = sub_matches.is_present("confirm");
+            let id_str = sub_matches.value_of("id").unwrap();
+            let snippet_id = i64::from_str(id_str)
+                .context("failed to parse snippet id")?;
+
+            commands::delete_snippet(snippet_id, confirmation)
         },
         ("list", Some(sub_matches)) => {
             let name = sub_matches.values_of("name").map(|x| x.collect::<Vec<&str>>().as_slice().join(" "));
