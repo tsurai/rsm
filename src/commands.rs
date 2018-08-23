@@ -6,6 +6,12 @@ use content;
 use util;
 use db;
 
+pub enum ModifyOperation<'a> {
+    Name(String),
+    Add(Vec<&'a str>),
+    Remove(Vec<&'a str>)
+}
+
 pub fn add_snippet(name: String, tags: Option<Vec<&str>>) -> Result<(), Error> {
     let content = (if util::is_a_tty() {
         content::get_from_editor()
@@ -35,6 +41,31 @@ pub fn show_snippet(snippet_id: i64) -> Result<(), Error> {
         .context("failed to load snippet")?;
 
     println!("{}", snippet);
+
+    Ok(())
+}
+
+pub fn modify_snippet(snippet_id: i64, op: ModifyOperation) -> Result<(), Error> {
+    let conn = db::connect()
+        .context("failed to connect to database")?;
+
+    db::get_snippet(&conn, snippet_id)
+        .context("failed to load snippet")?;
+
+    match op {
+        ModifyOperation::Name(name) => {
+            db::rename_snippet(&conn, snippet_id, name)
+                .context("failed to rename snippet")?;
+        },
+        ModifyOperation::Add(tags) => {
+            db::save_tags(&conn, snippet_id, tags)
+                .context("failed to add tags to snippet")?;
+        },
+        ModifyOperation::Remove(tags) => {
+            db::remove_tags(&conn, snippet_id, tags)
+                .context("failed to remove tags to snippet")?;
+        },
+    }
 
     Ok(())
 }

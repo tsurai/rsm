@@ -33,7 +33,8 @@ pub fn search_snippets(conn: &Connection, name: Option<String>, tags: Option<Vec
     let name_filter = name.clone().map_or(if tags.is_some() { "0" } else { "1" }, |_| "S.name LIKE ?");
     let tag_filter = tags.clone().map_or(if name.is_some() { "0" } else { "1" }.to_string(), |x| (0..x.len()).map(|_| "T.name LIKE ?").collect::<Vec<&str>>().as_slice().join(" AND "));
 
-    let query = format!("SELECT S.id, S.name, S.content FROM `snippets` AS S
+    let query = format!(
+        "SELECT S.id, S.name, S.content FROM `snippets` AS S
         WHERE {}
         UNION
         SELECT S.id, S.name, S.content FROM `snippets` AS S
@@ -163,12 +164,58 @@ pub fn save_snippet(conn: &Connection, name: String, content: String, tags: Opti
     Ok(snippet_id)
 }
 
-fn save_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Result<(), Error> {
+pub fn rename_snippet(conn: &Connection, snippet_id: i64, name: String) -> Result<(), Error> {
+    let mut statement = conn.prepare("UPDATE `snippets` SET name = ? WHERE id = ?;")
+        .context("failed to prepare snippet rename statement")?;
+
+    statement.bind(1, name.as_str())
+        .context("failed to bind name")?;
+    statement.bind(2, snippet_id)
+        .context("failed to bind id")?;
+
+    statement.next()
+        .context("failed to execute sql statement")?;
+
+    Ok(())
+}
+
+pub fn remove_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Result<(), Error> {
+    let tags_filter = tags.clone()
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<&str>>()
+        .as_slice()
+        .join(", ");
+
+    let query = format!(
+        "DELETE FROM `snippet_tags` AS ST
+        WHERE ST.snippet_id = ? AND ST.tag_id IN (
+            SELECT id FROM tags
+            WHERE tags.name IN ({})
+        )", tags_filter);
+
+    let mut statement = conn.prepare(query)
+        .context("failed to prepare snippet rename statement")?;
+
+    statement.bind(1, snippet_id)
+        .context("failed to bind id")?;
+
+    for (i, &tag) in tags.iter().enumerate() {
+        statement.bind(2+i, tag)
+            .context("failed to bind name")?;
+    }
+
+    statement.next()
+        .context("failed to execute sql statement")?;
+
+    Ok(())
+}
+
+pub fn save_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Result<(), Error> {
     // insert tag if not exists
     let mut insert_tag = conn.prepare(
        "INSERT INTO `tags` (name)
-       SELECT ?
-       WHERE NOT EXISTS (SELECT 1 FROM `tags` WHERE name = ?);"
+       VALUES (?)"
        ).context("failed to prepare tag save statement")?
        .cursor();
 
@@ -182,7 +229,7 @@ fn save_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Result<(), 
         .cursor();
 
     for tag in tags.clone() {
-        insert_tag.bind(&[Value::String(tag.to_string()), Value::String(tag.to_string())])
+        insert_tag.bind(&[Value::String(tag.to_string())])
             .context("failed to bind name")?;
 
         insert_tag.next()
@@ -263,12 +310,14 @@ fn init(db_file: &PathBuf) -> Result<Connection, Error> {
         );
         CREATE TABLE tags(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name VARCHAR(64) UNIQUE
+            name VARCHAR(64),
+            UNIQUE(name) ON CONFLICT IGNORE
         );
         CREATE TABLE snippet_tags(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             snippet_id INTEGER REFERENCES snippets(id) ON DELETE CASCADE,
-            tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE
+            tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
+            UNIQUE(snippet_id, tag_id) ON CONFLICT IGNORE
         );"
         ).context("failed to create database tables")?;
 

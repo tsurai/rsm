@@ -27,14 +27,12 @@ fn process_cli<'a>() -> ArgMatches<'a> {
 
     let name_arg = Arg::with_name("name")
         .help("name of the snippet")
-        .multiple(true)
-        .last(true);
+        .multiple(true);
 
     let tag_arg = Arg::with_name("tags")
         .help("tags to modify")
         .short("-t")
         .long("--tags")
-        .requires("modifier")
         .takes_value(true)
         .multiple(true);
 
@@ -55,6 +53,33 @@ fn process_cli<'a>() -> ArgMatches<'a> {
         .subcommand(
             SubCommand::with_name("show")
                 .about("Used to display a snippet")
+                .arg(&id_arg))
+        .subcommand(
+            SubCommand::with_name("modify")
+                .about("Used to modify a snippet")
+                .arg(&tag_arg
+                    .clone()
+                    .conflicts_with("name")
+                    .requires("modifier"))
+                .arg(Arg::with_name("add")
+                    .help("add a new tag")
+                    .short("-a")
+                    .long("--add"))
+                .arg(Arg::with_name("remove")
+                    .help("remove a tag")
+                    .short("-r")
+                    .long("--remove"))
+                .arg(Arg::with_name("name")
+                    .help("new snippet name")
+                    .short("-n")
+                    .long("--name")
+                    .takes_value(true)
+                    .multiple(true)
+                    .conflicts_with_all(&["modifier", "tags"]))
+                .group(ArgGroup::with_name("modifier")
+                    .args(&["add", "remove"])
+                    .conflicts_with("name")
+                    .requires("tags"))
                 .arg(&id_arg))
         .subcommand(
             SubCommand::with_name("delete")
@@ -89,6 +114,23 @@ fn run() -> Result<(), Error> {
                 .context("failed to parse snippet id")?;
 
             commands::show_snippet(snippet_id)
+        },
+        ("modify", Some(sub_matches)) => {
+            let name = sub_matches.values_of("name").map(|x| x.collect::<Vec<&str>>().as_slice().join(" "));
+            let tags = sub_matches.values_of("tags").map(|x| x.collect::<Vec<&str>>());
+            let id_str = sub_matches.value_of("id").unwrap();
+            let snippet_id = i64::from_str(id_str)
+                .context("failed to parse snippet id")?;
+
+            let op = if let Some(x) = name {
+                commands::ModifyOperation::Name(x)
+            } else if sub_matches.is_present("add") {
+                commands::ModifyOperation::Add(tags.unwrap())
+            } else {
+                commands::ModifyOperation::Remove(tags.unwrap())
+            };
+
+            commands::modify_snippet(snippet_id, op)
         },
         ("delete", Some(sub_matches)) => {
             let confirmation = sub_matches.is_present("confirm");
