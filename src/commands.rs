@@ -9,12 +9,13 @@ use db;
 pub enum ModifyOperation<'a> {
     Name(String),
     Add(Vec<&'a str>),
-    Remove(Vec<&'a str>)
+    Remove(Vec<&'a str>),
+    Content,
 }
 
 pub fn add_snippet(name: String, tags: Option<Vec<&str>>) -> Result<(), Error> {
     let content = (if util::is_a_tty() {
-        content::get_from_editor()
+        content::get_from_editor(None)
             .context("failed to get content from editor")
     } else {
         content::get_from_stdin()
@@ -49,7 +50,7 @@ pub fn modify_snippet(snippet_id: i64, op: ModifyOperation) -> Result<(), Error>
     let conn = db::connect()
         .context("failed to connect to database")?;
 
-    db::get_snippet(&conn, snippet_id)
+    let snippet = db::get_snippet(&conn, snippet_id)
         .context("failed to load snippet")?;
 
     match op {
@@ -64,6 +65,13 @@ pub fn modify_snippet(snippet_id: i64, op: ModifyOperation) -> Result<(), Error>
         ModifyOperation::Remove(tags) => {
             db::remove_tags(&conn, snippet_id, tags)
                 .context("failed to remove tags to snippet")?;
+        },
+        ModifyOperation::Content => {
+            let content = content::get_from_editor(Some(snippet.content))
+                .context("failed to get new content from editor")?;
+
+            db::change_snippet_content(&conn, snippet_id, content)
+                .context("failed to change snippet content")?;
         },
     }
 

@@ -124,10 +124,14 @@ fn run() -> Result<(), Error> {
 
             let op = if let Some(x) = name {
                 commands::ModifyOperation::Name(x)
-            } else if sub_matches.is_present("add") {
-                commands::ModifyOperation::Add(tags.unwrap())
+            } else if sub_matches.is_present("tags") {
+                if sub_matches.is_present("add") {
+                    commands::ModifyOperation::Add(tags.unwrap())
+                } else {
+                    commands::ModifyOperation::Remove(tags.unwrap())
+                }
             } else {
-                commands::ModifyOperation::Remove(tags.unwrap())
+                commands::ModifyOperation::Content
             };
 
             commands::modify_snippet(snippet_id, op)

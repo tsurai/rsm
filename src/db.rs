@@ -164,6 +164,21 @@ pub fn save_snippet(conn: &Connection, name: String, content: String, tags: Opti
     Ok(snippet_id)
 }
 
+pub fn change_snippet_content(conn: &Connection, snippet_id: i64, content: String) -> Result<(), Error> {
+    let mut statement = conn.prepare("UPDATE `snippets` SET content = ? WHERE id = ?;")
+        .context("failed to prepare content change statement")?;
+
+    statement.bind(1, content.as_str())
+        .context("failed to bind content")?;
+    statement.bind(2, snippet_id)
+        .context("failed to bind id")?;
+
+    statement.next()
+        .context("failed to execute sql statement")?;
+
+    Ok(())
+}
+
 pub fn rename_snippet(conn: &Connection, snippet_id: i64, name: String) -> Result<(), Error> {
     let mut statement = conn.prepare("UPDATE `snippets` SET name = ? WHERE id = ?;")
         .context("failed to prepare snippet rename statement")?;

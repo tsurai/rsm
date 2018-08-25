@@ -12,7 +12,7 @@ fn run_editor<S: AsRef<OsStr>>(file: S) -> Result<(), Error> {
         .unwrap_or("/usr/bin/editor".to_string());
 
     // start the editor and wait for its exit status
-    let status: ExitStatus = Command::new(editor.as_str())
+    let status: ExitStatus = Command::new(editor)
         .arg(file)
         .status()
         .map_err::<Error, _>(|e| e.into())?;
@@ -55,10 +55,19 @@ pub fn get_from_stdin() -> Result<String, Error> {
     Ok(content)
 }
 
-pub fn get_from_editor() -> Result<String, Error> {
+pub fn get_from_editor(init_content: Option<String>) -> Result<String, Error> {
     // tmp file gets deleted when going out of scope
     let tmp_file = Temp::new_file()
         .context("failed to create temporary file")?;
+
+    // initial content to edit. Used when editing a snippet
+    if let Some(content) = init_content {
+        let mut file = fs::OpenOptions::new().write(true).open(tmp_file.as_ref())
+            .context("failed to open temporary file")?;
+
+        file.write_all(content.as_bytes())
+            .context("failed to write content to temporary file")?;
+    }
 
     // run the editor and write the content to the tmp file
     run_editor(tmp_file.as_ref())
