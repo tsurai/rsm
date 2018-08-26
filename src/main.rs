@@ -7,6 +7,7 @@ extern crate failure;
 extern crate sqlite;
 extern crate mktemp;
 extern crate ansi_term;
+extern crate time;
 
 mod snippet;
 mod commands;

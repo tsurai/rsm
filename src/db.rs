@@ -3,6 +3,7 @@ use std::{env, fs};
 use sqlite::{self, Connection, Value, State};
 use failure::*;
 use snippet::Snippet;
+use util;
 use error;
 
 static DB_PATH: &'static str = ".local/rsm/data.db";
@@ -35,12 +36,13 @@ pub fn search_snippets(conn: &Connection, name: Option<String>, tags: Option<Vec
 
     let query = format!(
         "SELECT S.id, S.name, S.content FROM `snippets` AS S
-        WHERE {}
+        WHERE S.deleted = 0 AND {}
         UNION
         SELECT S.id, S.name, S.content FROM `snippets` AS S
         INNER JOIN `snippet_tags` AS ST ON ST.snippet_id = S.id
         INNER JOIN `tags` AS T ON T.id = ST.tag_id
-        WHERE {} GROUP BY S.id",
+        WHERE S.deleted = 0 AND {}
+        GROUP BY S.id",
         name_filter,
         tag_filter);
 
@@ -90,7 +92,9 @@ pub fn search_snippets(conn: &Connection, name: Option<String>, tags: Option<Vec
 }
 
 pub fn get_snippet(conn: &Connection, snippet_id: i64) -> Result<Snippet, Error> {
-    let mut statement = conn.prepare("SELECT name, content FROM `snippets` WHERE id = ?")
+    let mut statement = conn.prepare(
+        "SELECT name, content FROM `snippets`
+        WHERE deleted = 0 AND id = ?")
         .context("failed to prepare load statement")?;
 
     statement.bind(1, snippet_id)
@@ -122,39 +126,57 @@ pub fn get_snippet(conn: &Connection, snippet_id: i64) -> Result<Snippet, Error>
 }
 
 pub fn delete_snippet(conn: &Connection, snippet_id: i64) -> Result<(), Error> {
-    let mut statement = conn.prepare("DELETE FROM `snippets` WHERE id = ?")
+    let mut statement = conn.prepare(
+        "UPDATE `snippets` SET deleted = 1, last_updated = ?
+        WHERE id = ?")
         .context("failed to prepare load statement")?;
 
-    statement.bind(1, snippet_id)
+    statement.bind(1, util::get_utc_now())
+        .context("failed to bind time")?;
+    statement.bind(2, snippet_id)
         .context("failed to bind snippet id")?;
 
     statement.next()
         .context("failed to execute sql statement")?;
 
+    // remove all tags linked to this snippet
+    remove_tags_by_snippet_id(conn, snippet_id)
+        .context("failed to delete snippet tags")?;
+
     Ok(())
 }
 
 pub fn save_snippet(conn: &Connection, name: String, content: String, tags: Option<Vec<&str>>) -> Result<i64, Error> {
-    let mut statement = conn.prepare("INSERT INTO `snippets` (name, content) VALUES (?, ?)")
+    let new_last_updated = util::get_utc_now();
+
+    let mut statement = conn.prepare(
+        "INSERT INTO `snippets` (name, content, last_updated)
+        VALUES (?, ?, ?)
+        ON CONFLICT(name) DO UPDATE
+        SET content = ?, deleted = 0, last_updated = ?
+        WHERE deleted = 1")
         .context("failed to prepare save statement")?;
 
-    // bind INSERT values
     statement.bind(1, name.as_str())
         .context("failed to bind name")?;
     statement.bind(2, content.as_str())
         .context("failed to bind content")?;
+    statement.bind(3, new_last_updated)
+        .context("failed to bind time")?;
+    statement.bind(4, content.as_str())
+        .context("failed to bind content")?;
+    statement.bind(5, new_last_updated)
+        .context("failed to bind time")?;
 
-    if let Err(e) = statement.next() {
-        // check if the snippet name is a duplicate
-        if e.code.unwrap_or(0) == 19 {
-            bail!(error::DupSnippetName);
-        }
+    statement.next()
+        .context("failed to execute sql statement")?;
 
-        bail!(e.context("failed to execute sql statement"))
-    }
-
-    let snippet_id = get_snippet_id(&conn, name.as_str())
+    let (snippet_id, last_updated) = get_snippet_meta(&conn, name.as_str())
         .context("failed to get snippet id")?;
+
+    if new_last_updated != last_updated {
+        bail!(error::DupSnippetName);
+    }
 
     if let Some(tags) = tags {
         save_tags(&conn, snippet_id, tags)
@@ -165,12 +187,15 @@ pub fn save_snippet(conn: &Connection, name: String, content: String, tags: Opti
 }
 
 pub fn change_snippet_content(conn: &Connection, snippet_id: i64, content: String) -> Result<(), Error> {
-    let mut statement = conn.prepare("UPDATE `snippets` SET content = ? WHERE id = ?;")
+    let mut statement = conn.prepare(
+        "UPDATE `snippets` SET content = ?, last_updated = ? WHERE id = ?;")
         .context("failed to prepare content change statement")?;
 
     statement.bind(1, content.as_str())
         .context("failed to bind content")?;
-    statement.bind(2, snippet_id)
+    statement.bind(2, util::get_utc_now())
+        .context("failed to bind time")?;
+    statement.bind(3, snippet_id)
         .context("failed to bind id")?;
 
     statement.next()
@@ -180,11 +205,31 @@ pub fn change_snippet_content(conn: &Connection, snippet_id: i64, content: Strin
 }
 
 pub fn rename_snippet(conn: &Connection, snippet_id: i64, name: String) -> Result<(), Error> {
-    let mut statement = conn.prepare("UPDATE `snippets` SET name = ? WHERE id = ?;")
+    let mut statement = conn.prepare(
+        "UPDATE `snippets` SET name = ?, last_updated = ? WHERE id = ?;")
         .context("failed to prepare snippet rename statement")?;
 
     statement.bind(1, name.as_str())
         .context("failed to bind name")?;
+    statement.bind(2, util::get_utc_now())
+        .context("failed to bind time")?;
+    statement.bind(3, snippet_id)
+        .context("failed to bind id")?;
+
+    statement.next()
+        .context("failed to execute sql statement")?;
+
+    Ok(())
+}
+
+fn remove_tags_by_snippet_id(conn: &Connection, snippet_id: i64) -> Result<(), Error> {
+    let mut statement = conn.prepare(
+        "UPDATE `snippet_tags` SET deleted = 1, last_updated = ?
+        WHERE snippet_id = ?")
+        .context("failed to prepare tag removal statement")?;
+
+    statement.bind(1, util::get_utc_now())
+        .context("failed to bind time")?;
     statement.bind(2, snippet_id)
         .context("failed to bind id")?;
 
@@ -194,7 +239,7 @@ pub fn rename_snippet(conn: &Connection, snippet_id: i64, name: String) -> Resul
     Ok(())
 }
 
-pub fn remove_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Result<(), Error> {
+pub fn remove_tags_by_name(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Result<(), Error> {
     let tags_filter = tags.clone()
         .iter()
         .map(|_| "?")
@@ -203,7 +248,7 @@ pub fn remove_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Resul
         .join(", ");
 
     let query = format!(
-        "DELETE FROM `snippet_tags` AS ST
+        "UPDATE `snippet_tags` AS ST SET deleted = 1, last_updated = ?
         WHERE ST.snippet_id = ? AND ST.tag_id IN (
             SELECT id FROM tags
             WHERE tags.name IN ({})
@@ -212,11 +257,13 @@ pub fn remove_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Resul
     let mut statement = conn.prepare(query)
         .context("failed to prepare snippet rename statement")?;
 
-    statement.bind(1, snippet_id)
+    statement.bind(1, util::get_utc_now())
+        .context("failed to bind time")?;
+    statement.bind(2, snippet_id)
         .context("failed to bind id")?;
 
     for (i, &tag) in tags.iter().enumerate() {
-        statement.bind(2+i, tag)
+        statement.bind(3+i, tag)
             .context("failed to bind name")?;
     }
 
@@ -229,28 +276,34 @@ pub fn remove_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Resul
 pub fn save_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Result<(), Error> {
     // insert tag if not exists
     let mut insert_tag = conn.prepare(
-       "INSERT INTO `tags` (name)
-       VALUES (?)"
-       ).context("failed to prepare tag save statement")?
+       "INSERT INTO `tags` (name, last_updated)
+       VALUES (?, ?)")
+       .context("failed to prepare tag save statement")?
        .cursor();
 
     // save relationship between snippet and tag
     let mut insert_snippet_tag = conn.prepare(
-        "INSERT INTO `snippet_tags` (snippet_id, tag_id)
-        SELECT ?, id
+        "INSERT INTO `snippet_tags` (snippet_id, tag_id, deleted, last_updated)
+        SELECT ?, id, 0, ?
         FROM `tags`
-        WHERE name = ?"
-        ).context("failed to prepare snippet_tag save statement")?
+        WHERE name = ?
+        ON CONFLICT(snippet_id, tag_id) DO UPDATE
+        SET deleted = 0, last_updated = ?")
+        .context("failed to prepare snippet_tag save statement")?
         .cursor();
 
     for tag in tags.clone() {
-        insert_tag.bind(&[Value::String(tag.to_string())])
+        insert_tag.bind(&[Value::String(tag.to_string()),
+                          Value::Integer(util::get_utc_now())])
             .context("failed to bind name")?;
 
         insert_tag.next()
             .context("failed to execute sql statement")?;
 
-        insert_snippet_tag.bind(&[Value::Integer(snippet_id), Value::String(tag.to_string())])
+        insert_snippet_tag.bind(&[Value::Integer(snippet_id),
+                                  Value::Integer(util::get_utc_now()),
+                                  Value::String(tag.to_string()),
+                                  Value::Integer(util::get_utc_now())])
             .context("failed to bind values")?;
 
         insert_snippet_tag.next()
@@ -260,8 +313,10 @@ pub fn save_tags(conn: &Connection, snippet_id: i64, tags: Vec<&str>) -> Result<
     Ok(())
 }
 
-fn get_snippet_id(conn: &Connection, name: &str) -> Result<i64, Error> {
-    let mut statement = conn.prepare("SELECT id FROM `snippets` WHERE name = ?")
+fn get_snippet_meta(conn: &Connection, name: &str) -> Result<(i64, i64), Error> {
+    let mut statement = conn.prepare(
+        "SELECT id, last_updated FROM `snippets` WHERE
+        deleted = 0 AND name = ?")
         .context("failed to prepare save statement")?;
 
     statement.bind(1, name)
@@ -271,16 +326,18 @@ fn get_snippet_id(conn: &Connection, name: &str) -> Result<i64, Error> {
         .context("failed to execute sql statement")?;
 
     let snippet_id = statement.read::<i64>(0)
-        .context("failed to select snippet")?;
+        .context("failed to read id col")?;
+    let last_updated = statement.read::<i64>(1)
+        .context("failed to read update time col")?;
 
-    Ok(snippet_id)
+    Ok((snippet_id, last_updated))
 }
 
 fn get_snippet_tags(conn: &Connection, snippet_id: i64) -> Result<Vec<String>, Error> {
     let mut statement = conn.prepare(
         "SELECT name FROM `tags` AS T
-        INNER JOIN `snippet_tags` AS ST on T.id = ST.tag_id
-        AND ST.snippet_id = ?"
+        INNER JOIN `snippet_tags` AS ST on T.id = ST.tag_id AND
+        ST.deleted = 0 AND ST.snippet_id = ?"
         ).context("failed to prepare load statement")?;
 
     statement.bind(1, snippet_id)
@@ -321,18 +378,30 @@ fn init(db_file: &PathBuf) -> Result<Connection, Error> {
         "CREATE TABLE snippets(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name VARCHAR(64) UNIQUE,
-            content TEXT
+            content TEXT,
+            deleted INTEGER DEFAULT 0,
+            last_updated INTEGER NOT NULL
         );
         CREATE TABLE tags(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name VARCHAR(64),
+            deleted INTEGER DEFAULT 0,
+            last_updated INTEGER NOT NULL,
             UNIQUE(name) ON CONFLICT IGNORE
         );
         CREATE TABLE snippet_tags(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             snippet_id INTEGER REFERENCES snippets(id) ON DELETE CASCADE,
             tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
-            UNIQUE(snippet_id, tag_id) ON CONFLICT IGNORE
+            deleted INTEGER DEFAULT 0,
+            last_updated INTEGER NOT NULL,
+            UNIQUE(snippet_id, tag_id)
+        );
+        CREATE TABLE metadata(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR(32),
+            value TEXT,
+            UNIQUE(name) ON CONFLICT REPLACE
         );"
         ).context("failed to create database tables")?;
 

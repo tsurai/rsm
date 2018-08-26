@@ -63,7 +63,7 @@ pub fn modify_snippet(snippet_id: i64, op: ModifyOperation) -> Result<(), Error>
                 .context("failed to add tags to snippet")?;
         },
         ModifyOperation::Remove(tags) => {
-            db::remove_tags(&conn, snippet_id, tags)
+            db::remove_tags_by_name(&conn, snippet_id, tags)
                 .context("failed to remove tags to snippet")?;
         },
         ModifyOperation::Content => {
