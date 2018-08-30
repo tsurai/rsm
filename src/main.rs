@@ -1,6 +1,5 @@
 #[macro_use]
 extern crate log;
-extern crate fern;
 extern crate libc;
 extern crate clap;
 extern crate failure;
@@ -9,12 +8,23 @@ extern crate mktemp;
 extern crate ansi_term;
 extern crate time;
 
+#[cfg(feature = "sync")]
+extern crate bufstream;
+#[cfg(feature = "sync")]
+extern crate native_tls;
+#[cfg(feature = "sync")]
+#[macro_use]
+extern crate json;
+
 mod snippet;
 mod commands;
 mod content;
 mod error;
 mod util;
 mod db;
+
+#[cfg(feature = "sync")]
+mod sync;
 
 use clap::{Arg, App, ArgGroup, ArgMatches, AppSettings, SubCommand};
 use std::str::FromStr;
@@ -96,6 +106,9 @@ fn process_cli<'a>() -> ArgMatches<'a> {
                 .setting(AppSettings::TrailingVarArg)
                 .arg(&tag_arg)
                 .arg(&name_arg))
+        .subcommand(
+            SubCommand::with_name("sync")
+                .about("Used to sync data"))
         .get_matches()
 }
 
@@ -150,6 +163,14 @@ fn run() -> Result<(), Error> {
             let tags = sub_matches.values_of("tags").map(|x| x.collect::<Vec<&str>>());
 
             commands::list_snippets(name, tags)
+        },
+        #[cfg(feature = "sync")]
+        ("sync", Some(_)) => {
+            commands::sync_data()
+        },
+        #[cfg(not(feature = "sync"))]
+        ("sync", Some(_)) => {
+            bail!(error::SyncingNotEnabled)
         },
         _ => panic!("unexpected error"),
     }

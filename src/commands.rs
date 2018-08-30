@@ -162,3 +162,40 @@ pub fn list_snippets(name: Option<String>, tags: Option<Vec<&str>>) -> Result<()
 
     Ok(())
 }
+
+#[cfg(feature = "sync")]
+pub fn sync_data() -> Result<(), Error> {
+    use std::str::FromStr;
+    use sync;
+    use json;
+
+    let conn = db::connect()
+        .context("failed to connect to database")?;
+
+    let meta_value = db::get_metadata_value(&conn, "last_synced")
+        .context("failed to get last synced time")?;
+
+    let last_synced = i64::from_str(meta_value.as_str())
+        .context("failed to parse last synced string")?;
+
+    let sync_data = db::get_sync_data(&conn, last_synced)
+        .context("failed to get sync data")?;
+
+    let json_data = object!{
+        "snippets" => sync_data.0,
+        "tags" => sync_data.1,
+        "snippet_tags" => sync_data.2
+    };
+
+    let serialized_data = json::stringify(json_data);
+
+    // dummy data for testing of the server side code
+    sync::sync_data("localhost:5000", "localhost", last_synced, serialized_data.as_str())
+        .context("failed to sync data")?;
+
+    let sync_time = format!("{}", util::get_utc_now());
+    db::set_metadata_value(&conn, "last_synced", sync_time.as_str())
+        .context("failed to update sync time")?;
+
+    Ok(())
+}

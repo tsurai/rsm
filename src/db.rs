@@ -5,6 +5,8 @@ use failure::*;
 use snippet::Snippet;
 use util;
 use error;
+#[cfg(feature = "sync")]
+use sync;
 
 static DB_PATH: &'static str = ".local/rsm/data.db";
 
@@ -31,8 +33,15 @@ pub fn connect() -> Result<Connection, Error> {
 }
 
 pub fn search_snippets(conn: &Connection, name: Option<String>, tags: Option<Vec<&str>>) -> Result<Vec<Snippet>, Error> {
-    let name_filter = name.clone().map_or(if tags.is_some() { "0" } else { "1" }, |_| "S.name LIKE ?");
-    let tag_filter = tags.clone().map_or(if name.is_some() { "0" } else { "1" }.to_string(), |x| (0..x.len()).map(|_| "T.name LIKE ?").collect::<Vec<&str>>().as_slice().join(" AND "));
+    let name_filter = name.clone()
+        .map_or(if tags.is_some() { "0" } else { "1" }, |_| "S.name LIKE ?");
+    let tag_filter = tags.clone()
+        .map_or(
+            if name.is_some() { "0" } else { "1" }.to_string(),
+            |x| (0..x.len()).map(|_| "T.name LIKE ?")
+        .collect::<Vec<&str>>()
+        .as_slice()
+        .join(" AND "));
 
     let query = format!(
         "SELECT S.id, S.name, S.content FROM `snippets` AS S
@@ -337,8 +346,8 @@ fn get_snippet_tags(conn: &Connection, snippet_id: i64) -> Result<Vec<String>, E
     let mut statement = conn.prepare(
         "SELECT name FROM `tags` AS T
         INNER JOIN `snippet_tags` AS ST on T.id = ST.tag_id AND
-        ST.deleted = 0 AND ST.snippet_id = ?"
-        ).context("failed to prepare load statement")?;
+        ST.deleted = 0 AND ST.snippet_id = ?")
+        .context("failed to prepare load statement")?;
 
     statement.bind(1, snippet_id)
         .context("failed to bind snippet id")?;
@@ -353,6 +362,164 @@ fn get_snippet_tags(conn: &Connection, snippet_id: i64) -> Result<Vec<String>, E
     }
 
     Ok(tags)
+}
+
+#[cfg(feature = "sync")]
+fn parse_snippet_row(statement: &mut sqlite::Statement) -> Result<sync::SnippetRow, Error> {
+    let id = statement.read::<i64>(0)
+        .context("failed to read id col")?;
+    let name = statement.read::<String>(1)
+        .context("failed to read name col")?;
+    let content = statement.read::<String>(2)
+        .context("failed to read content col")?;
+    let deleted = statement.read::<i64>(3)
+        .context("failed to read deleted col")?;
+    let last_updated = statement.read::<i64>(4)
+        .context("failed to read last update col")?;
+
+    let row = sync::SnippetRow {
+        id: id,
+        name: name,
+        content: content,
+        deleted: deleted,
+        last_updated: last_updated,
+    };
+
+    Ok(row)
+}
+
+#[cfg(feature = "sync")]
+fn parse_tag_row(statement: &mut sqlite::Statement) -> Result<sync::TagRow, Error> {
+    let id = statement.read::<i64>(0)
+        .context("failed to read id col")?;
+    let name = statement.read::<String>(1)
+        .context("failed to read name col")?;
+    let deleted = statement.read::<i64>(2)
+        .context("failed to read deleted col")?;
+    let last_updated = statement.read::<i64>(3)
+        .context("failed to read last update col")?;
+
+    let row = sync::TagRow {
+        id: id,
+        name: name,
+        deleted: deleted,
+        last_updated: last_updated,
+    };
+
+    Ok(row)
+}
+
+#[cfg(feature = "sync")]
+fn parse_snippet_tag_row(statement: &mut sqlite::Statement) -> Result<sync::SnippetTagRow, Error> {
+    let id = statement.read::<i64>(0)
+        .context("failed to read id col")?;
+    let snippet_id = statement.read::<i64>(1)
+        .context("failed to read snippet id col")?;
+    let tag_id = statement.read::<i64>(2)
+        .context("failed to read tag id col")?;
+    let deleted = statement.read::<i64>(3)
+        .context("failed to read deleted col")?;
+    let last_updated = statement.read::<i64>(4)
+        .context("failed to read last update col")?;
+
+    let row = sync::SnippetTagRow {
+        id: id,
+        snippet_id: snippet_id,
+        tag_id: tag_id,
+        deleted: deleted,
+        last_updated: last_updated,
+    };
+
+    Ok(row)
+}
+
+#[cfg(feature = "sync")]
+pub type SyncData = (Vec<sync::SnippetRow>, Vec<sync::TagRow>, Vec<sync::SnippetTagRow>);
+
+#[cfg(feature = "sync")]
+pub fn get_sync_data(conn: &Connection, last_synced: i64) -> Result<SyncData, Error> {
+    let mut snippet_data = Vec::new();
+    let mut tag_data = Vec::new();
+    let mut snippet_tag_data = Vec::new();
+
+    let tables = vec!["snippets", "tags", "snippet_tags"];
+
+    for (idx, table) in tables.iter().enumerate() {
+        let query = format!("SELECT * FROM `{}` WHERE last_updated > ?", table);
+
+        let mut statement = conn.prepare(query)
+            .context("failed to prepare sync statement")?;
+
+        statement.bind(1, last_synced)
+            .context("failed to bind last synced time")?;
+
+        while let State::Row = statement.next().context("failed to execute sql statement")? {
+            match idx {
+                0 => {
+                    let row = parse_snippet_row(&mut statement)
+                        .context("failed to parse snippet row")?;
+                    snippet_data.push(row);
+                },
+                1 => {
+                    let row = parse_tag_row(&mut statement)
+                        .context("failed to parse tag row")?;
+                    tag_data.push(row);
+                },
+                2 => {
+                    let row = parse_snippet_tag_row(&mut statement)
+                        .context("failed to parse snippet tag row")?;
+                    snippet_tag_data.push(row);
+                },
+                _ => panic!("unexpected error")
+            };
+        }
+    }
+
+    Ok((snippet_data, tag_data, snippet_tag_data))
+}
+
+pub fn get_metadata_value(conn: &Connection, key: &str) -> Result<String, Error> {
+    let mut statement = conn.prepare("SELECT value FROM metadata WHERE key = ?")
+        .context("failed to prepare meta data statement")?;
+
+    statement.bind(1, key)
+        .context("failed to bind key")?;
+
+    let state = statement.next()
+        .context("failed to execute sql statement")?;
+
+    if state == State::Done {
+        bail!(error::UnknownMetaKey);
+    }
+
+    let value = statement.read::<String>(0)
+        .context("failed to read value col")?;
+
+    Ok(value)
+}
+
+pub fn set_metadata_value(conn: &Connection, key: &str, value: &str) -> Result<(), Error> {
+    let mut statement = conn.prepare(
+        "INSERT INTO `metadata` (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE
+        SET value = ?
+        WHERE key = ?")
+        .context("failed to prepare metadata statement")?;
+
+    statement.bind(1, key)
+        .context("failed to bind key")?;
+    statement.bind(2, value)
+        .context("failed to bind value")?;
+    statement.bind(3, value)
+        .context("failed to bind value")?;
+    statement.bind(4, key)
+        .context("failed to bind key")?;
+
+    statement.next()
+        .context("failed to execute sql statement")?;
+
+    Ok(())
 }
 
 fn get_db_path() -> Result<PathBuf, Error> {
@@ -391,18 +558,19 @@ fn init(db_file: &PathBuf) -> Result<Connection, Error> {
         );
         CREATE TABLE snippet_tags(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            snippet_id INTEGER REFERENCES snippets(id) ON DELETE CASCADE,
-            tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
+            snippet_id INTEGER REFERENCES snippets(id),
+            tag_id INTEGER REFERENCES tags(id),
             deleted INTEGER DEFAULT 0,
             last_updated INTEGER NOT NULL,
             UNIQUE(snippet_id, tag_id)
         );
         CREATE TABLE metadata(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name VARCHAR(32),
+            key VARCHAR(32),
             value TEXT,
-            UNIQUE(name) ON CONFLICT REPLACE
-        );"
+            UNIQUE(key) ON CONFLICT REPLACE
+        );
+        INSERT INTO `metadata` (key, value) VALUES ('last_synced', 0);"
         ).context("failed to create database tables")?;
 
     Ok(conn)
